@@ -4,9 +4,9 @@ const userSchema = new mongoose.Schema(
   {
     googleId: {
       type: String,
-      required: true,
       unique: true,
       index: true,
+      sparse: true,
       trim: true
     },
     displayName: {
@@ -22,6 +22,10 @@ const userSchema = new mongoose.Schema(
       trim: true
     },
     avatar: {
+      type: String,
+      default: ""
+    },
+    passwordHash: {
       type: String,
       default: ""
     },

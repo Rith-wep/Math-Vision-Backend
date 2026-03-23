@@ -2,6 +2,22 @@ import dotenv from "dotenv";
 
 dotenv.config();
 
+const isDevelopment = (process.env.NODE_ENV || "development") === "development";
+
+const getEnvValue = (key, developmentFallback = "") => {
+  const value = process.env[key];
+
+  if (value) {
+    return value;
+  }
+
+  if (isDevelopment) {
+    return developmentFallback;
+  }
+
+  return "";
+};
+
 /**
  * Central place for environment variables so the rest of the app
  * reads from one clean object instead of process.env everywhere.
@@ -9,21 +25,38 @@ dotenv.config();
 export const env = {
   nodeEnv: process.env.NODE_ENV || "development",
   port: Number(process.env.PORT) || 5000,
-  clientUrl: process.env.CLIENT_URL || "http://localhost:5173",
-  frontendAuthCallbackUrl:
-    process.env.FRONTEND_AUTH_CALLBACK_URL || "http://localhost:5173/auth/callback",
-  mongoUri: process.env.MONGODB_URI || "mongodb://localhost:27017/khmer_math_solver",
-  jwtSecret: process.env.JWT_SECRET || "development_secret",
+  clientUrl: getEnvValue("CLIENT_URL", "http://localhost:5173"),
+  frontendAuthCallbackUrl: getEnvValue(
+    "FRONTEND_AUTH_CALLBACK_URL",
+    "http://localhost:5173/auth/callback"
+  ),
+  mongoUri: getEnvValue("MONGODB_URI", "mongodb://localhost:27017/khmer_math_solver"),
+  jwtSecret: getEnvValue("JWT_SECRET", "development_secret"),
   jwtExpiresIn: process.env.JWT_EXPIRES_IN || "7d",
-  geminiApiKey: process.env.GEMINI_API_KEY || "",
-  googleClientId: process.env.GOOGLE_CLIENT_ID || "",
-  googleClientSecret: process.env.GOOGLE_CLIENT_SECRET || "",
-  googleCallbackUrl:
-    process.env.GOOGLE_CALLBACK_URL || "http://localhost:5000/auth/google/callback",
-  googleCloudTtsCredentialsJson: process.env.GOOGLE_CLOUD_TTS_CREDENTIALS_JSON || "",
+  geminiApiKey: getEnvValue("GEMINI_API_KEY"),
+  googleClientId: getEnvValue("GOOGLE_CLIENT_ID"),
+  googleClientSecret: getEnvValue("GOOGLE_CLIENT_SECRET"),
+  googleCallbackUrl: getEnvValue("GOOGLE_CALLBACK_URL", "http://localhost:5000/auth/google/callback"),
+  googleCloudTtsCredentialsJson: getEnvValue("GOOGLE_CLOUD_TTS_CREDENTIALS_JSON"),
   googleCloudVisionCredentialsJson:
-    process.env.GOOGLE_CLOUD_VISION_CREDENTIALS_JSON ||
-    process.env.GOOGLE_CLOUD_TTS_CREDENTIALS_JSON ||
-    "",
-  googleCloudProjectId: process.env.GOOGLE_CLOUD_PROJECT_ID || ""
+    getEnvValue("GOOGLE_CLOUD_VISION_CREDENTIALS_JSON")
+    || getEnvValue("GOOGLE_CLOUD_TTS_CREDENTIALS_JSON"),
+  googleCloudProjectId: getEnvValue("GOOGLE_CLOUD_PROJECT_ID")
 };
+
+if (!isDevelopment) {
+  const requiredProductionEnvKeys = [
+    "CLIENT_URL",
+    "MONGODB_URI",
+    "JWT_SECRET",
+    "GEMINI_API_KEY"
+  ];
+
+  const missingKeys = requiredProductionEnvKeys.filter((key) => !process.env[key]);
+
+  if (missingKeys.length > 0) {
+    throw new Error(
+      `Missing required production environment variables: ${missingKeys.join(", ")}`
+    );
+  }
+}

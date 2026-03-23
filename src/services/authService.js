@@ -1,3 +1,4 @@
+import bcrypt from "bcryptjs";
 import jwt from "jsonwebtoken";
 
 import { env } from "../config/env.js";
@@ -23,21 +24,83 @@ export const authService = {
     const avatar = profile.photos?.[0]?.value || "";
     const displayName = profile.displayName || email;
 
-    const user = await User.findOneAndUpdate(
-      { googleId: profile.id },
-      {
-        $set: {
-          displayName,
-          email,
-          avatar
-        }
-      },
-      {
-        new: true,
-        upsert: true,
-        setDefaultsOnInsert: true
-      }
-    );
+    const existingUser = await User.findOne({
+      $or: [{ googleId: profile.id }, { email }]
+    });
+
+    if (existingUser) {
+      existingUser.googleId = profile.id;
+      existingUser.displayName = displayName;
+      existingUser.email = email;
+      existingUser.avatar = avatar;
+      await existingUser.save();
+      return existingUser;
+    }
+
+    return User.create({
+      googleId: profile.id,
+      displayName,
+      email,
+      avatar
+    });
+  },
+
+  async registerWithEmail({ displayName, email, password }) {
+    const normalizedEmail = email?.trim().toLowerCase();
+    const trimmedName = displayName?.trim();
+
+    if (!trimmedName) {
+      throw new AppError("Full name is required.", 400);
+    }
+
+    if (!normalizedEmail) {
+      throw new AppError("Email is required.", 400);
+    }
+
+    if (!password || password.length < 6) {
+      throw new AppError("Password must be at least 6 characters long.", 400);
+    }
+
+    const existingUser = await User.findOne({ email: normalizedEmail });
+
+    if (existingUser?.passwordHash) {
+      throw new AppError("An account with this email already exists.", 409);
+    }
+
+    const passwordHash = await bcrypt.hash(password, 12);
+
+    if (existingUser) {
+      existingUser.displayName = trimmedName;
+      existingUser.passwordHash = passwordHash;
+      await existingUser.save();
+      return existingUser;
+    }
+
+    return User.create({
+      displayName: trimmedName,
+      email: normalizedEmail,
+      passwordHash
+    });
+  },
+
+  async loginWithEmail({ email, password }) {
+    const normalizedEmail = email?.trim().toLowerCase();
+
+    if (!normalizedEmail || !password) {
+      throw new AppError("Email and password are required.", 400);
+    }
+
+    const user = await User.findOne({ email: normalizedEmail });
+
+    if (!user?.passwordHash) {
+      throw new AppError("Invalid email or password.", 401);
+    }
+
+    const isPasswordValid = await bcrypt.compare(password, user.passwordHash);
+
+    if (!isPasswordValid) {
+      throw new AppError("Invalid email or password.", 401);
+    }
 
     return user;
   },

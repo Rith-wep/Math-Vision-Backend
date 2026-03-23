@@ -20,6 +20,34 @@ const buildFrontendCallbackUrl = ({ token, user, error }) => {
 };
 
 export const authController = {
+  async register(request, response, next) {
+    try {
+      const user = await authService.registerWithEmail(request.body);
+      const { token, user: safeUser } = authService.buildAuthResponse(user);
+
+      response.status(201).json({
+        token,
+        user: safeUser
+      });
+    } catch (error) {
+      next(error);
+    }
+  },
+
+  async login(request, response, next) {
+    try {
+      const user = await authService.loginWithEmail(request.body);
+      const { token, user: safeUser } = authService.buildAuthResponse(user);
+
+      response.status(200).json({
+        token,
+        user: safeUser
+      });
+    } catch (error) {
+      next(error);
+    }
+  },
+
   googleCallback(request, response) {
     const { token, user } = authService.buildAuthResponse(request.user);
     response.redirect(buildFrontendCallbackUrl({ token, user }));
