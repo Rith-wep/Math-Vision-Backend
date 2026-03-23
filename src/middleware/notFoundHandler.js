@@ -3,6 +3,6 @@
  */
 export const notFoundHandler = (request, response) => {
   response.status(404).json({
-    message: "Route not found."
+    message: "រកមិនឃើញទំព័រ ឬសេវាកម្មដែលបានស្នើទេ។"
   });
 };
