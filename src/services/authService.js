@@ -130,6 +130,27 @@ export const authService = {
     }
   },
 
+  async updateProfile(userId, { displayName, avatar }) {
+    const user = await User.findById(userId);
+
+    if (!user) {
+      throw new AppError("User not found.", 404);
+    }
+
+    const trimmedName = typeof displayName === "string" ? displayName.trim() : "";
+    const normalizedAvatar = typeof avatar === "string" ? avatar.trim() : "";
+
+    if (!trimmedName) {
+      throw new AppError("Full name is required.", 400);
+    }
+
+    user.displayName = trimmedName;
+    user.avatar = normalizedAvatar;
+    await user.save();
+
+    return user;
+  },
+
   buildAuthResponse(user) {
     const safeUser = buildUserPayload(user);
     const token = this.createToken(user);

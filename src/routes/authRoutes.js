@@ -39,4 +39,5 @@ authRoutes.get(
 
 authRoutes.get("/google/failure", authController.googleFailure);
 authRoutes.get("/me", requireAuth, authController.getCurrentUser);
+authRoutes.patch("/profile", requireAuth, authController.updateProfile);
 authRoutes.get("/logout", authController.logout);

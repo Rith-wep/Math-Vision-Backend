@@ -66,6 +66,20 @@ export const authController = {
     });
   },
 
+  async updateProfile(request, response, next) {
+    try {
+      const updatedUser = await authService.updateProfile(request.user._id, request.body);
+      const { token, user } = authService.buildAuthResponse(updatedUser);
+
+      response.status(200).json({
+        token,
+        user
+      });
+    } catch (error) {
+      next(error);
+    }
+  },
+
   logout(request, response) {
     response.status(200).json({
       message: "Logged out successfully."
