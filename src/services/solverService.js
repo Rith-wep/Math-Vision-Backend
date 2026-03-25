@@ -5,6 +5,7 @@ import "nerdamer/Calculus.js";
 import "nerdamer/Solve.js";
 
 import { env } from "../config/env.js";
+import { SolutionLibrary } from "../models/solutionLibraryModel.js";
 import { AppError } from "../utils/AppError.js";
 
 const GEMINI_MODEL = "gemini-2.5-flash";
@@ -12,6 +13,8 @@ const ALLOWED_COMPLEXITIES = new Set(["identity", "basic", "complex"]);
 const SUPPORTED_IMAGE_MIME_TYPES = new Set(["image/jpeg", "image/png", "image/webp"]);
 const MAX_EXPRESSION_LENGTH = 1200;
 const EPSILON = 1e-9;
+const LIBRARY_QUERY_TIMEOUT_MS = 2000;
+const LIBRARY_LABEL = "រកឃើញក្នុងបណ្ណាល័យចម្លើយ";
 
 const INVALID_EQUATION_MESSAGE = "The math expression is not valid. Please check it again.";
 
@@ -102,6 +105,24 @@ Rules:
 - For basic: use 0 or 1 short step only.
 - For complex: use 3 to 6 steps.
 - token_saved_mode must be true.
+`;
+
+const buildImageExtractionPrompt = () => `
+You are the Math Vision OCR extraction engine.
+
+The user uploaded an image containing a math question.
+Read the image carefully and return only the extracted math expression or question text.
+
+Return this exact JSON shape:
+{
+  "question_text": "Clean math text or LaTeX extracted from the image"
+}
+
+Rules:
+- Return only JSON, no markdown fences.
+- question_text must contain only the math problem.
+- Preserve math symbols and LaTeX when possible.
+- Do not include explanations or steps.
 `;
 
 const buildGeometryPrompt = (expression) => `
@@ -229,6 +250,62 @@ const normalizeExpressionInput = (expression) => {
   return normalized;
 };
 
+const normalizeExpressionForLibrary = (expression) =>
+  sanitizeField(expression)
+    .toLowerCase()
+    .replace(/\\left|\\right/g, "")
+    .replace(/\\,/g, "")
+    .replace(/\s+/g, " ")
+    .replace(/\s*([=+\-*/^(){}\[\],])\s*/g, "$1")
+    .trim();
+
+const buildLibrarySearchExpression = (expression) =>
+  normalizeExpressionForLibrary(expression)
+    .replace(/[{}[\]()]/g, " ")
+    .replace(/\\[a-z]+/g, " ")
+    .replace(/[^a-z0-9\u1780-\u17ff]+/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+
+const escapeRegex = (value) => value.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
+
+const computeSimilarityScore = (left, right) => {
+  if (!left || !right) {
+    return 0;
+  }
+
+  if (left === right) {
+    return 1;
+  }
+
+  const leftTokens = new Set(left.split(" ").filter(Boolean));
+  const rightTokens = new Set(right.split(" ").filter(Boolean));
+
+  if (!leftTokens.size || !rightTokens.size) {
+    return 0;
+  }
+
+  let intersectionCount = 0;
+
+  leftTokens.forEach((token) => {
+    if (rightTokens.has(token)) {
+      intersectionCount += 1;
+    }
+  });
+
+  return intersectionCount / new Set([...leftTokens, ...rightTokens]).size;
+};
+
+const buildLibraryResponse = (solutionDocument) => {
+  const plainSolution = JSON.parse(JSON.stringify(solutionDocument.solution || {}));
+
+  return {
+    ...plainSolution,
+    servedFromLibrary: true,
+    cacheLabel: LIBRARY_LABEL
+  };
+};
+
 const normalizeComplexity = (complexity, steps) => {
   if (ALLOWED_COMPLEXITIES.has(complexity)) {
     return complexity;
@@ -309,6 +386,20 @@ const validateAndNormalizeResponse = (parsed, fallbackQuestionText = "") => {
     steps,
     token_saved_mode: true
   };
+};
+
+const validateExtractedQuestionText = (parsed) => {
+  if (!parsed || typeof parsed !== "object" || Array.isArray(parsed)) {
+    throw new AppError("Gemini returned an invalid image extraction payload.", 502);
+  }
+
+  const questionText = sanitizeField(parsed.question_text);
+
+  if (!questionText || !hasMathLikeContent(questionText)) {
+    throw new AppError("Unable to extract a math problem from the image.", 422);
+  }
+
+  return normalizeExpressionInput(questionText);
 };
 
 const isApproximatelyZero = (value) => Math.abs(value) <= EPSILON;
@@ -1197,7 +1288,129 @@ class SolverService {
     }
   }
 
-  async solveExpression(expression) {
+  async extractQuestionTextFromImage(cleanedBase64, mimeType) {
+    const rawText = await this.generateRawText([
+      { text: buildImageExtractionPrompt() },
+      {
+        inlineData: {
+          mimeType,
+          data: cleanedBase64
+        }
+      }
+    ]);
+
+    return validateExtractedQuestionText(extractJson(rawText));
+  }
+
+  async findSolutionInLibrary(expression) {
+    const normalizedExpression = normalizeExpressionForLibrary(expression);
+    const searchExpression = buildLibrarySearchExpression(expression);
+    const startedAt = Date.now();
+    const getRemainingTime = () => Math.max(LIBRARY_QUERY_TIMEOUT_MS - (Date.now() - startedAt), 1);
+
+    try {
+      const exactMatch = await SolutionLibrary.findOne({ normalizedExpression })
+        .maxTimeMS(getRemainingTime())
+        .lean();
+
+      if (exactMatch?.solution) {
+        return buildLibraryResponse(exactMatch);
+      }
+
+      if (!searchExpression) {
+        return null;
+      }
+
+      const tokenPattern = searchExpression
+        .split(" ")
+        .filter((token) => token.length >= 2)
+        .slice(0, 6)
+        .map((token) => escapeRegex(token))
+        .join("|");
+
+      if (!tokenPattern || getRemainingTime() <= 1) {
+        return null;
+      }
+
+      const candidates = await SolutionLibrary.find({
+        searchExpression: { $regex: tokenPattern, $options: "i" }
+      })
+        .sort({ updatedAt: -1 })
+        .limit(8)
+        .maxTimeMS(getRemainingTime())
+        .lean();
+
+      const bestMatch = candidates
+        .map((candidate) => ({
+          candidate,
+          score: computeSimilarityScore(searchExpression, candidate.searchExpression || "")
+        }))
+        .filter(({ score }) => score >= 0.6)
+        .sort((left, right) => right.score - left.score)[0];
+
+      return bestMatch?.candidate?.solution ? buildLibraryResponse(bestMatch.candidate) : null;
+    } catch (error) {
+      if (error?.name === "MongooseError" || error?.name === "MongoServerError") {
+        return null;
+      }
+
+      if (String(error?.message || "").toLowerCase().includes("maxtimems")) {
+        return null;
+      }
+
+      return null;
+    }
+  }
+
+  async saveSolutionToLibrary(expression, solution) {
+    if (!expression || !solution) {
+      return;
+    }
+
+    const normalizedExpression = normalizeExpressionForLibrary(expression);
+    const searchExpression = buildLibrarySearchExpression(expression);
+
+    if (!normalizedExpression || !searchExpression) {
+      return;
+    }
+
+    try {
+      await SolutionLibrary.findOneAndUpdate(
+        { normalizedExpression },
+        {
+          $set: {
+            originalExpression: expression,
+            normalizedExpression,
+            searchExpression,
+            solution
+          }
+        },
+        {
+          upsert: true,
+          new: true,
+          setDefaultsOnInsert: true
+        }
+      );
+    } catch {
+      // Library persistence should never block the main solver flow.
+    }
+  }
+
+  async solveLibraryBackedExpression(expression) {
+    const normalizedExpression = normalizeExpressionInput(expression);
+    const cachedSolution = await this.findSolutionInLibrary(normalizedExpression);
+
+    if (cachedSolution) {
+      return cachedSolution;
+    }
+
+    const freshSolution = await this.solveExpressionCore(normalizedExpression);
+    await this.saveSolutionToLibrary(normalizedExpression, freshSolution);
+
+    return freshSolution;
+  }
+
+  async solveExpressionCore(expression) {
     const normalizedExpression = normalizeExpressionInput(expression);
 
     if (isIdentityExpression(normalizedExpression)) {
@@ -1287,6 +1500,10 @@ class SolverService {
     );
   }
 
+  async solveExpression(expression) {
+    return this.solveLibraryBackedExpression(expression);
+  }
+
   async solveImageBase64(imageBase64, mimeType = "image/jpeg") {
     if (!imageBase64?.trim()) {
       throw new AppError("Image data is missing.", 400);
@@ -1306,27 +1523,8 @@ class SolverService {
       throw new AppError("Image data is not valid base64.", 400);
     }
 
-    const parsed = await this.generateJson([
-      { text: buildImagePrompt() },
-      {
-        inlineData: {
-          mimeType,
-          data: cleanedBase64
-        }
-      }
-    ]);
-
-    const questionText = (parsed.question_text || "").trim();
-
-    if (!questionText) {
-      throw new AppError("Unable to extract a math problem from the image.", 422);
-    }
-
-    if (isGeometryProblem(questionText)) {
-      return this.generateJson([{ text: buildGeometryPrompt(questionText) }], questionText);
-    }
-
-    return parsed;
+    const questionText = await this.extractQuestionTextFromImage(cleanedBase64, mimeType);
+    return this.solveLibraryBackedExpression(questionText);
   }
 }
 
