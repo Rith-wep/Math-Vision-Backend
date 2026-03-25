@@ -18,6 +18,25 @@ const getEnvValue = (key, developmentFallback = "") => {
   return "";
 };
 
+const parseClientOrigins = () => {
+  const configuredOrigins = (process.env.CLIENT_URLS || process.env.CLIENT_URL || "")
+    .split(",")
+    .map((origin) => origin.trim())
+    .filter(Boolean);
+
+  const defaultDevelopmentOrigins = [
+    "http://localhost:5173",
+    "http://127.0.0.1:5173"
+  ];
+
+  return Array.from(
+    new Set([
+      ...configuredOrigins,
+      ...(isDevelopment ? defaultDevelopmentOrigins : [])
+    ])
+  );
+};
+
 /**
  * Central place for environment variables so the rest of the app
  * reads from one clean object instead of process.env everywhere.
@@ -26,6 +45,7 @@ export const env = {
   nodeEnv: process.env.NODE_ENV || "development",
   port: Number(process.env.PORT) || 5000,
   clientUrl: getEnvValue("CLIENT_URL", "http://localhost:5173"),
+  clientOrigins: parseClientOrigins(),
   frontendAuthCallbackUrl: getEnvValue(
     "FRONTEND_AUTH_CALLBACK_URL",
     "http://localhost:5173/auth/callback"
