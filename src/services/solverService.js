@@ -572,6 +572,38 @@ const buildArithmeticResult = (expression) => {
   };
 };
 
+const normalizeInequalityOperators = (expression) =>
+  sanitizeField(expression)
+    .replace(/\\leq|≤/gi, "<=")
+    .replace(/\\geq|≥/gi, ">=")
+    .replace(/\\lt/gi, "<")
+    .replace(/\\gt/gi, ">");
+
+const parseInequalityExpression = (expression) => {
+  const normalized = normalizeInequalityOperators(expression);
+  const match = normalized.match(/^(.*?)(<=|>=|<|>)(.*)$/);
+
+  if (!match) {
+    return null;
+  }
+
+  const [, leftSide, operator, rightSide] = match;
+
+  if (!leftSide?.trim() || !rightSide?.trim()) {
+    return null;
+  }
+
+  if ((normalized.match(/<=|>=|<|>/g) || []).length !== 1) {
+    return null;
+  }
+
+  return {
+    leftSide: leftSide.trim(),
+    operator,
+    rightSide: rightSide.trim()
+  };
+};
+
 const detectVariableSymbol = (expression) => {
   const variables = new Set((expression.match(/[xy]/gi) || []).map((character) => character.toLowerCase()));
 
@@ -989,6 +1021,132 @@ const buildPolynomialLatex = (coefficients, variableSymbol) => {
     .join(" ");
 };
 
+const toLatexInequalityOperator = (operator) => {
+  if (operator === "<=") return "\\leq";
+  if (operator === ">=") return "\\geq";
+  return operator;
+};
+
+const reverseInequalityOperator = (operator) => {
+  if (operator === "<") return ">";
+  if (operator === ">") return "<";
+  if (operator === "<=") return ">=";
+  if (operator === ">=") return "<=";
+  return operator;
+};
+
+const analyzeLinearInequality = (expression) => {
+  const parts = parseInequalityExpression(expression);
+
+  if (!parts) {
+    return null;
+  }
+
+  const variableSymbol = detectVariableSymbol(expression);
+
+  if (!variableSymbol) {
+    return null;
+  }
+
+  const normalizedLeft = normalizeLocalMath(parts.leftSide);
+  const normalizedRight = normalizeLocalMath(parts.rightSide);
+
+  if (!normalizedLeft || !normalizedRight) {
+    return null;
+  }
+
+  if (!/^[0-9xy+\-*/().^]*$/i.test(normalizedLeft) || !/^[0-9xy+\-*/().^]*$/i.test(normalizedRight)) {
+    return null;
+  }
+
+  try {
+    const differenceExpression = `(${parts.leftSide})-(${parts.rightSide})`;
+    const values = [0, 1, 2].map((sample) =>
+      evaluateSafeExpression(differenceExpression, variableSymbol, sample)
+    );
+
+    const secondDifference = values[2] - 2 * values[1] + values[0];
+
+    if (Math.abs(secondDifference) > 1e-6) {
+      return null;
+    }
+
+    const constantTerm = values[0];
+    const variableCoefficient = values[1] - values[0];
+
+    if (isApproximatelyZero(variableCoefficient)) {
+      return null;
+    }
+
+    return {
+      variableSymbol,
+      operator: parts.operator,
+      variableCoefficient,
+      constantTerm
+    };
+  } catch {
+    return null;
+  }
+};
+
+const analyzeQuadraticInequality = (expression) => {
+  const parts = parseInequalityExpression(expression);
+
+  if (!parts) {
+    return null;
+  }
+
+  const variableSymbol = detectVariableSymbol(expression);
+
+  if (!variableSymbol) {
+    return null;
+  }
+
+  const normalizedLeft = normalizeLocalMath(parts.leftSide);
+  const normalizedRight = normalizeLocalMath(parts.rightSide);
+
+  if (!normalizedLeft || !normalizedRight) {
+    return null;
+  }
+
+  if (!/^[0-9xy+\-*/().^]*$/i.test(normalizedLeft) || !/^[0-9xy+\-*/().^]*$/i.test(normalizedRight)) {
+    return null;
+  }
+
+  try {
+    const differenceExpression = `(${parts.leftSide})-(${parts.rightSide})`;
+    const values = [0, 1, 2, 3].map((sample) =>
+      evaluateSafeExpression(differenceExpression, variableSymbol, sample)
+    );
+
+    const thirdDifference = values[3] - 3 * values[2] + 3 * values[1] - values[0];
+
+    if (Math.abs(thirdDifference) > 1e-6) {
+      return null;
+    }
+
+    const c = values[0];
+    const a = (values[2] - 2 * values[1] + values[0]) / 2;
+    const b = values[1] - a - c;
+
+    if (isApproximatelyZero(a)) {
+      return null;
+    }
+
+    return {
+      variableSymbol,
+      operator: parts.operator,
+      coefficients: {
+        a,
+        b,
+        c
+      }
+    };
+  } catch {
+    return null;
+  }
+};
+
 const analyzePolynomialEquation = (expression) => {
   if ((expression.match(/=/g) || []).length !== 1) {
     return null;
@@ -1055,6 +1213,171 @@ const analyzePolynomialEquation = (expression) => {
   } catch {
     return null;
   }
+};
+
+const buildLinearInequalityResult = (expression, analysis) => {
+  const {
+    variableSymbol,
+    operator,
+    variableCoefficient,
+    constantTerm
+  } = analysis;
+  const standardForm = `${buildPolynomialLatex(
+    { b: variableCoefficient, c: constantTerm },
+    variableSymbol
+  )} ${toLatexInequalityOperator(operator)} 0`;
+  const boundary = -constantTerm / variableCoefficient;
+  const finalOperator = variableCoefficient < 0 ? reverseInequalityOperator(operator) : operator;
+  const finalAnswer = `${variableSymbol} ${toLatexInequalityOperator(finalOperator)} ${toLatexNumber(boundary)}`;
+
+  return {
+    question_text: expression,
+    expression,
+    complexity: "complex",
+    final_answer: finalAnswer,
+    steps: [
+      {
+        step: 1,
+        explanation: "រៀបចំអសមីការទៅទម្រង់ស្តង់ដារ។",
+        formula: standardForm
+      },
+      {
+        step: 2,
+        explanation: "ដោះស្រាយតម្លៃអថេរ ហើយប្តូរទិសសញ្ញាប្រសិនបើចែកដោយចំនួនអវិជ្ជមាន។",
+        formula: finalAnswer
+      }
+    ],
+    token_saved_mode: true
+  };
+};
+
+const evaluateInequalityRelation = (value, operator) => {
+  if (operator === "<") return value < -EPSILON;
+  if (operator === "<=") return value <= EPSILON;
+  if (operator === ">") return value > EPSILON;
+  if (operator === ">=") return value >= -EPSILON;
+  return false;
+};
+
+const getQuadraticRootLatex = (a, b, discriminant, variant = "single") => {
+  if (isApproximatelyZero(discriminant)) {
+    return toLatexNumber(-b / (2 * a));
+  }
+
+  const sqrtDiscriminant = Math.sqrt(Math.max(discriminant, 0));
+  const denominator = 2 * a;
+  const approximateRoot =
+    variant === "lower"
+      ? (-b - sqrtDiscriminant) / denominator
+      : (-b + sqrtDiscriminant) / denominator;
+
+  if (isPerfectSquareInteger(discriminant)) {
+    return toLatexNumber(approximateRoot);
+  }
+
+  const denominatorLatex = toLatexNumber(denominator);
+  const numeratorPrefix = isApproximatelyZero(-b) ? "" : `${toLatexNumber(-b, { preferFraction: false })}`;
+  const sqrtLatex = `\\sqrt{${normalizeNumberString(discriminant)}}`;
+
+  if (variant === "lower") {
+    const numerator = numeratorPrefix ? `${numeratorPrefix} - ${sqrtLatex}` : `-${sqrtLatex}`;
+    return `\\frac{${numerator}}{${denominatorLatex}}`;
+  }
+
+  const numerator = numeratorPrefix ? `${numeratorPrefix} + ${sqrtLatex}` : sqrtLatex;
+  return `\\frac{${numerator}}{${denominatorLatex}}`;
+};
+
+const buildQuadraticInequalityFinalAnswer = ({
+  variableSymbol,
+  operator,
+  a,
+  b,
+  discriminant
+}) => {
+  if (discriminant < -EPSILON) {
+    return evaluateInequalityRelation(a, operator) ? "All real numbers" : "No real solution";
+  }
+
+  if (isApproximatelyZero(discriminant)) {
+    const rootLatex = getQuadraticRootLatex(a, b, 0);
+
+    if ((a > 0 && operator === ">=") || (a < 0 && operator === "<=")) {
+      return "All real numbers";
+    }
+
+    if ((a > 0 && operator === "<") || (a < 0 && operator === ">")) {
+      return "No real solution";
+    }
+
+    if ((a > 0 && operator === "<=") || (a < 0 && operator === ">=")) {
+      return `${variableSymbol} = ${rootLatex}`;
+    }
+
+    return `${variableSymbol} < ${rootLatex} \\;\\mathrm{or}\\; ${variableSymbol} > ${rootLatex}`;
+  }
+
+  const lowerRootLatex = getQuadraticRootLatex(a, b, discriminant, "lower");
+  const upperRootLatex = getQuadraticRootLatex(a, b, discriminant, "upper");
+  const opensUp = a > 0;
+
+  if ((opensUp && operator === "<") || (!opensUp && operator === ">")) {
+    return `${lowerRootLatex} < ${variableSymbol} < ${upperRootLatex}`;
+  }
+
+  if ((opensUp && operator === "<=") || (!opensUp && operator === ">=")) {
+    return `${lowerRootLatex} \\leq ${variableSymbol} \\leq ${upperRootLatex}`;
+  }
+
+  if ((opensUp && operator === ">") || (!opensUp && operator === "<")) {
+    return `${variableSymbol} < ${lowerRootLatex} \\;\\mathrm{or}\\; ${variableSymbol} > ${upperRootLatex}`;
+  }
+
+  return `${variableSymbol} \\leq ${lowerRootLatex} \\;\\mathrm{or}\\; ${variableSymbol} \\geq ${upperRootLatex}`;
+};
+
+const buildQuadraticInequalityResult = (expression, analysis) => {
+  const {
+    variableSymbol,
+    operator,
+    coefficients: { a, b, c }
+  } = analysis;
+  const standardForm = `${buildPolynomialLatex({ a, b, c }, variableSymbol)} ${toLatexInequalityOperator(operator)} 0`;
+  const discriminant = b ** 2 - 4 * a * c;
+  const normalizedDiscriminant = isApproximatelyZero(discriminant) ? 0 : discriminant;
+  const deltaLatex = `\\Delta = ${normalizeNumberString(b)}^{2} - 4(${normalizeNumberString(a)})(${normalizeNumberString(c)}) = ${normalizeNumberString(normalizedDiscriminant)}`;
+  const finalAnswer = buildQuadraticInequalityFinalAnswer({
+    variableSymbol,
+    operator,
+    a,
+    b,
+    discriminant: normalizedDiscriminant
+  });
+
+  return {
+    question_text: expression,
+    expression,
+    complexity: "complex",
+    final_answer: finalAnswer,
+    steps: [
+      {
+        step: 1,
+        explanation: "រៀបចំអសមីការទៅទម្រង់ស្តង់ដារ។",
+        formula: standardForm
+      },
+      {
+        step: 2,
+        explanation: "គណនាតម្លៃ discriminant ដើម្បីពិនិត្យចំនុចកាត់អ័ក្ស។",
+        formula: deltaLatex
+      },
+      {
+        step: 3,
+        explanation: "កំណត់ចន្លោះដែលធ្វើឱ្យអសមីការពិត តាមសញ្ញារបស់ប៉ារ៉ាបូល។",
+        formula: finalAnswer
+      }
+    ],
+    token_saved_mode: true
+  };
 };
 
 const buildLinearEquationResult = (expression, variableSymbol, coefficients) => {
@@ -1199,6 +1522,276 @@ const buildQuadraticEquationResult = (expression, variableSymbol, coefficients) 
         step: 3,
         explanation: "ប្រើរូបមន្តសមីការការេដើម្បីរកឫសទាំងពីរ។",
         formula: rootsLatex
+      }
+    ],
+    token_saved_mode: true
+  };
+};
+
+const parseLabeledPoint3D = (expression, label) => {
+  const pattern = new RegExp(
+    `${label}\\s*\\(\\s*([+-]?\\d+(?:\\.\\d+)?)\\s*,\\s*([+-]?\\d+(?:\\.\\d+)?)\\s*,\\s*([+-]?\\d+(?:\\.\\d+)?)\\s*\\)`,
+    "i"
+  );
+  const match = sanitizeField(expression)
+    .replace(/[−–—]/g, "-")
+    .match(pattern);
+
+  if (!match) {
+    return null;
+  }
+
+  return {
+    label,
+    x: Number(match[1]),
+    y: Number(match[2]),
+    z: Number(match[3])
+  };
+};
+
+const crossProduct3D = (left, right) => ({
+  x: left.y * right.z - left.z * right.y,
+  y: left.z * right.x - left.x * right.z,
+  z: left.x * right.y - left.y * right.x
+});
+
+const vectorBetween3DPoints = (from, to) => ({
+  x: to.x - from.x,
+  y: to.y - from.y,
+  z: to.z - from.z
+});
+
+const gcdMultiple = (values = []) =>
+  values.reduce((current, value) => gcd(current, value), 0);
+
+const normalizePlaneCoefficients = ({ a, b, c, d }) => {
+  const rounded = [a, b, c, d].map((value) => Math.round(value));
+  const areIntegers = [a, b, c, d].every((value, index) => Math.abs(value - rounded[index]) <= EPSILON);
+
+  if (!areIntegers) {
+    return { a, b, c, d };
+  }
+
+  const divisor = Math.abs(gcdMultiple(rounded)) || 1;
+  let normalized = {
+    a: rounded[0] / divisor,
+    b: rounded[1] / divisor,
+    c: rounded[2] / divisor,
+    d: rounded[3] / divisor
+  };
+
+  const firstNonZero = [normalized.a, normalized.b, normalized.c].find((value) => !isApproximatelyZero(value));
+
+  if (firstNonZero && firstNonZero < 0) {
+    normalized = {
+      a: -normalized.a,
+      b: -normalized.b,
+      c: -normalized.c,
+      d: -normalized.d
+    };
+  }
+
+  return normalized;
+};
+
+const buildPlaneEquationLatex = ({ a, b, c, d }) => {
+  const terms = [];
+
+  [
+    { coefficient: a, symbol: "x" },
+    { coefficient: b, symbol: "y" },
+    { coefficient: c, symbol: "z" }
+  ].forEach(({ coefficient, symbol }) => {
+    if (isApproximatelyZero(coefficient)) {
+      return;
+    }
+
+    const absolute = Math.abs(coefficient);
+    const sign = coefficient < 0 ? "-" : "+";
+    const body = isApproximatelyZero(absolute - 1) ? symbol : `${toLatexNumber(absolute)}${symbol}`;
+
+    terms.push({ sign, body });
+  });
+
+  if (!isApproximatelyZero(d)) {
+    terms.push({
+      sign: d < 0 ? "-" : "+",
+      body: toLatexNumber(Math.abs(d))
+    });
+  }
+
+  if (terms.length === 0) {
+    return "0 = 0";
+  }
+
+  const leftSide = terms
+    .map((term, index) => {
+      if (index === 0) {
+        return term.sign === "-" ? `-${term.body}` : term.body;
+      }
+
+      return `${term.sign === "-" ? "-" : "+"} ${term.body}`;
+    })
+    .join(" ");
+
+  return `${leftSide} = 0`;
+};
+
+const trySolvePlaneThroughThreePoints = (expression) => {
+  const normalizedExpression = sanitizeField(expression).replace(/[−–—]/g, "-");
+  const points = ["A", "B", "C"].map((label) => parseLabeledPoint3D(normalizedExpression, label));
+
+  if (points.some((point) => !point)) {
+    return null;
+  }
+
+  const mentionsPlane =
+    /\(P\)|plane|find the plane|equation of the plane/i.test(normalizedExpression)
+    || /áž”áŸ’áž›áž„áŸ‹|ážŸáž˜áž¸áž€áž¶ážšáž”áŸ’áž›áž„áŸ‹/i.test(normalizedExpression);
+
+  if (!mentionsPlane) {
+    return null;
+  }
+
+  const [pointA, pointB, pointC] = points;
+  const vectorAB = vectorBetween3DPoints(pointA, pointB);
+  const vectorAC = vectorBetween3DPoints(pointA, pointC);
+  const normalVector = crossProduct3D(vectorAB, vectorAC);
+
+  if (
+    isApproximatelyZero(normalVector.x)
+    && isApproximatelyZero(normalVector.y)
+    && isApproximatelyZero(normalVector.z)
+  ) {
+    return null;
+  }
+
+  const coefficients = normalizePlaneCoefficients({
+    a: normalVector.x,
+    b: normalVector.y,
+    c: normalVector.z,
+    d: -(normalVector.x * pointA.x + normalVector.y * pointA.y + normalVector.z * pointA.z)
+  });
+  const normalLatex = `\\vec{n} = (${toLatexNumber(coefficients.a)}, ${toLatexNumber(coefficients.b)}, ${toLatexNumber(coefficients.c)})`;
+  const pointFormLatex = `${toLatexNumber(coefficients.a)}(x-${toLatexNumber(pointA.x)}) + ${toLatexNumber(coefficients.b)}(y-${toLatexNumber(pointA.y)}) + ${toLatexNumber(coefficients.c)}(z-${toLatexNumber(pointA.z)}) = 0`;
+  const finalAnswer = buildPlaneEquationLatex(coefficients);
+
+  return {
+    question_text: expression,
+    expression,
+    complexity: "complex",
+    final_answer: finalAnswer,
+    steps: [
+      {
+        step: 1,
+        explanation: "Build direction vectors from the three given points.",
+        formula: `\\overrightarrow{AB} = (${toLatexNumber(vectorAB.x)}, ${toLatexNumber(vectorAB.y)}, ${toLatexNumber(vectorAB.z)}),\\quad \\overrightarrow{AC} = (${toLatexNumber(vectorAC.x)}, ${toLatexNumber(vectorAC.y)}, ${toLatexNumber(vectorAC.z)})`
+      },
+      {
+        step: 2,
+        explanation: "Take the cross product to get a normal vector of the plane.",
+        formula: normalLatex
+      },
+      {
+        step: 3,
+        explanation: "Use point-normal form through point A, then simplify.",
+        formula: `${pointFormLatex} \\Rightarrow ${finalAnswer}`
+      }
+    ],
+    token_saved_mode: true
+  };
+};
+
+const parsePlaneEquation = (expression) => {
+  const normalizedExpression = sanitizeField(expression)
+    .replace(/[−–—]/g, "-")
+    .replace(/\s+/g, "");
+  const planeMatch = normalizedExpression.match(/([+-]?\d*)x([+-]\d*)y([+-]\d*)z([+-]\d+)=0/i);
+
+  if (!planeMatch) {
+    return null;
+  }
+
+  const parseCoefficient = (value, { allowImplicitOne = false } = {}) => {
+    if (value === "+" || value === "" || value === undefined) {
+      return allowImplicitOne ? 1 : 0;
+    }
+
+    if (value === "-") {
+      return allowImplicitOne ? -1 : 0;
+    }
+
+    return Number(value);
+  };
+
+  const a = parseCoefficient(planeMatch[1], { allowImplicitOne: true });
+  const b = parseCoefficient(planeMatch[2], { allowImplicitOne: true });
+  const c = parseCoefficient(planeMatch[3], { allowImplicitOne: true });
+  const d = parseCoefficient(planeMatch[4]);
+
+  if ([a, b, c, d].some((value) => !Number.isFinite(value))) {
+    return null;
+  }
+
+  return { a, b, c, d };
+};
+
+const buildPlaneSubstitutionLatex = (plane, point) => {
+  const wrapSigned = (value) => (value < 0 ? `(${toLatexNumber(value)})` : toLatexNumber(value));
+
+  return `${toLatexNumber(plane.a)}\\cdot ${wrapSigned(point.x)} + ${toLatexNumber(plane.b)}\\cdot ${wrapSigned(point.y)} + ${toLatexNumber(plane.c)}\\cdot ${wrapSigned(point.z)} ${plane.d < 0 ? "-" : "+"} ${toLatexNumber(Math.abs(plane.d))}`;
+};
+
+const trySolvePointOnPlane = (expression) => {
+  const normalizedExpression = sanitizeField(expression).replace(/[−–—]/g, "-");
+  const pointM = parseLabeledPoint3D(normalizedExpression, "M");
+  const plane = parsePlaneEquation(normalizedExpression);
+
+  if (!pointM || !plane) {
+    return null;
+  }
+
+  const mentionsPlaneCheck =
+    /\(P\)|plane/i.test(normalizedExpression)
+    || /áŸ‹áž”áŸ’áž›áž„áŸ‹|áŸ‹áž›áŸ†áž |áŸ‹ážŸá្ថិត/i.test(normalizedExpression);
+
+  if (!mentionsPlaneCheck) {
+    return null;
+  }
+
+  const substitutionValue =
+    plane.a * pointM.x
+    + plane.b * pointM.y
+    + plane.c * pointM.z
+    + plane.d;
+  const normalizedValue = isApproximatelyZero(substitutionValue) ? 0 : substitutionValue;
+  const finalAnswer = normalizedValue === 0
+    ? "ដូចនេះ ចំណុច M ស្ថិតនៅលើប្លង់"
+    : "ដូចនេះ ចំណុច M មិនស្ថិតនៅលើប្លង់ទេ";
+  const planeLatex = buildPlaneEquationLatex(plane);
+  const substitutionLatex = buildPlaneSubstitutionLatex(plane, pointM);
+  const evaluationLatex = `${substitutionLatex} = ${toLatexNumber(normalizedValue)}`;
+
+  return {
+    question_text: expression,
+    expression,
+    complexity: "complex",
+    final_answer: finalAnswer,
+    steps: [
+      {
+        step: 1,
+        explanation: "យកកូអរដោនេរបស់ចំណុច M ដាក់ទៅក្នុងសមីការប្លង់។",
+        formula: `${planeLatex},\\quad M(${toLatexNumber(pointM.x)}, ${toLatexNumber(pointM.y)}, ${toLatexNumber(pointM.z)})`
+      },
+      {
+        step: 2,
+        explanation: "ជំនួសតម្លៃ x_0, y_0, z_0 ទៅក្នុង ax + by + cz + d។",
+        formula: evaluationLatex
+      },
+      {
+        step: 3,
+        explanation: finalAnswer,
+        formula: normalizedValue === 0 ? "0 = 0" : `${toLatexNumber(normalizedValue)} \\neq 0`
       }
     ],
     token_saved_mode: true
@@ -1446,6 +2039,18 @@ class SolverService {
       return buildArithmeticResult(normalizedExpression);
     }
 
+    const linearInequalityAnalysis = analyzeLinearInequality(normalizedExpression);
+
+    if (linearInequalityAnalysis) {
+      return buildLinearInequalityResult(normalizedExpression, linearInequalityAnalysis);
+    }
+
+    const quadraticInequalityAnalysis = analyzeQuadraticInequality(normalizedExpression);
+
+    if (quadraticInequalityAnalysis) {
+      return buildQuadraticInequalityResult(normalizedExpression, quadraticInequalityAnalysis);
+    }
+
     const polynomialAnalysis = analyzePolynomialEquation(normalizedExpression);
 
     if (polynomialAnalysis?.type === "linear_equation") {
@@ -1482,6 +2087,18 @@ class SolverService {
 
     if (symbolicExpressionResult) {
       return symbolicExpressionResult;
+    }
+
+    const pointOnPlaneResult = trySolvePointOnPlane(normalizedExpression);
+
+    if (pointOnPlaneResult) {
+      return pointOnPlaneResult;
+    }
+
+    const planeThroughThreePointsResult = trySolvePlaneThroughThreePoints(normalizedExpression);
+
+    if (planeThroughThreePointsResult) {
+      return planeThroughThreePointsResult;
     }
 
     const unsupportedType = detectUnsupportedExpression(normalizedExpression);
