@@ -37,6 +37,12 @@ const parseClientOrigins = () => {
   );
 };
 
+const parseAdminEmails = () =>
+  (process.env.ADMIN_EMAILS || "")
+    .split(",")
+    .map((email) => email.trim().toLowerCase())
+    .filter(Boolean);
+
 /**
  * Central place for environment variables so the rest of the app
  * reads from one clean object instead of process.env everywhere.
@@ -61,7 +67,8 @@ export const env = {
   googleCloudVisionCredentialsJson:
     getEnvValue("GOOGLE_CLOUD_VISION_CREDENTIALS_JSON")
     || getEnvValue("GOOGLE_CLOUD_TTS_CREDENTIALS_JSON"),
-  googleCloudProjectId: getEnvValue("GOOGLE_CLOUD_PROJECT_ID")
+  googleCloudProjectId: getEnvValue("GOOGLE_CLOUD_PROJECT_ID"),
+  adminEmails: parseAdminEmails()
 };
 
 if (!isDevelopment) {

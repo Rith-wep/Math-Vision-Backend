@@ -10,8 +10,23 @@ const buildUserPayload = (user) => ({
   googleId: user.googleId,
   displayName: user.displayName,
   email: user.email,
-  avatar: user.avatar
+  avatar: user.avatar,
+  role: user.role || "user"
 });
+
+const resolveUserRole = (email, currentRole = "user") => {
+  const normalizedEmail = email?.trim().toLowerCase();
+
+  if (currentRole === "admin") {
+    return "admin";
+  }
+
+  if (normalizedEmail && env.adminEmails.includes(normalizedEmail)) {
+    return "admin";
+  }
+
+  return "user";
+};
 
 export const authService = {
   async findOrCreateGoogleUser(profile) {
@@ -33,6 +48,7 @@ export const authService = {
       existingUser.displayName = displayName;
       existingUser.email = email;
       existingUser.avatar = avatar;
+      existingUser.role = resolveUserRole(email, existingUser.role);
       await existingUser.save();
       return existingUser;
     }
@@ -41,7 +57,8 @@ export const authService = {
       googleId: profile.id,
       displayName,
       email,
-      avatar
+      avatar,
+      role: resolveUserRole(email)
     });
   },
 
@@ -72,6 +89,7 @@ export const authService = {
     if (existingUser) {
       existingUser.displayName = trimmedName;
       existingUser.passwordHash = passwordHash;
+      existingUser.role = resolveUserRole(normalizedEmail, existingUser.role);
       await existingUser.save();
       return existingUser;
     }
@@ -79,7 +97,8 @@ export const authService = {
     return User.create({
       displayName: trimmedName,
       email: normalizedEmail,
-      passwordHash
+      passwordHash,
+      role: resolveUserRole(normalizedEmail)
     });
   },
 
@@ -100,6 +119,13 @@ export const authService = {
 
     if (!isPasswordValid) {
       throw new AppError("Invalid email or password.", 401);
+    }
+
+    const nextRole = resolveUserRole(normalizedEmail, user.role);
+
+    if (user.role !== nextRole) {
+      user.role = nextRole;
+      await user.save();
     }
 
     return user;

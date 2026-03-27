@@ -1,8 +1,28 @@
 import { env } from "../config/env.js";
 import { authService } from "../services/authService.js";
 
-const buildFrontendCallbackUrl = ({ token, user, error }) => {
-  const callbackUrl = new URL(env.frontendAuthCallbackUrl);
+const resolveFrontendCallbackBaseUrl = (request) => {
+  const requestedCallback = typeof request.query.state === "string" ? request.query.state.trim() : "";
+
+  if (!requestedCallback) {
+    return env.frontendAuthCallbackUrl;
+  }
+
+  try {
+    const parsedUrl = new URL(requestedCallback);
+
+    if (env.clientOrigins.includes(parsedUrl.origin)) {
+      return parsedUrl.toString();
+    }
+  } catch {
+    // Fall back to the default configured callback URL.
+  }
+
+  return env.frontendAuthCallbackUrl;
+};
+
+const buildFrontendCallbackUrl = (request, { token, user, error }) => {
+  const callbackUrl = new URL(resolveFrontendCallbackBaseUrl(request));
 
   if (token) {
     callbackUrl.searchParams.set("token", token);
@@ -50,11 +70,11 @@ export const authController = {
 
   googleCallback(request, response) {
     const { token, user } = authService.buildAuthResponse(request.user);
-    response.redirect(buildFrontendCallbackUrl({ token, user }));
+    response.redirect(buildFrontendCallbackUrl(request, { token, user }));
   },
 
   googleFailure(request, response) {
-    response.redirect(buildFrontendCallbackUrl({ error: "google_oauth_failed" }));
+    response.redirect(buildFrontendCallbackUrl(request, { error: "google_oauth_failed" }));
   },
 
   getCurrentUser(request, response) {

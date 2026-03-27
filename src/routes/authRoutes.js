@@ -19,10 +19,12 @@ const ensureGoogleAuthConfigured = (request, response, next) => {
 authRoutes.get(
   "/google",
   ensureGoogleAuthConfigured,
-  passport.authenticate("google", {
-    scope: ["profile", "email"],
-    session: false
-  })
+  (request, response, next) =>
+    passport.authenticate("google", {
+      scope: ["profile", "email"],
+      session: false,
+      state: typeof request.query.frontend_callback === "string" ? request.query.frontend_callback : ""
+    })(request, response, next)
 );
 
 authRoutes.post("/register", authController.register);
