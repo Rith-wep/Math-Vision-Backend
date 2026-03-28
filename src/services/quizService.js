@@ -189,7 +189,7 @@ export const quizService = {
 
     const [subjects, adminQuestions, adminSettings, user] = await Promise.all([
       QuizSubject.find().sort({ createdAt: 1 }).lean(),
-      QcmQuestion.find().sort({ updatedAt: -1, createdAt: -1 }).lean(),
+      QcmQuestion.find().sort({ createdAt: 1, updatedAt: 1 }).lean(),
       AdminQcmSettings.find({ category: { $exists: true, $ne: "" } }).lean(),
       User.findById(userId).lean()
     ]);
@@ -224,7 +224,7 @@ export const quizService = {
     await this.ensureSeedData();
 
     const [adminQuestions, adminSettings, dbSubject, user] = await Promise.all([
-      isAdminSubjectId(subjectId) ? QcmQuestion.find().sort({ updatedAt: -1, createdAt: -1 }).lean() : [],
+      isAdminSubjectId(subjectId) ? QcmQuestion.find().sort({ createdAt: 1, updatedAt: 1 }).lean() : [],
       isAdminSubjectId(subjectId) ? AdminQcmSettings.find({ category: { $exists: true, $ne: "" } }).lean() : [],
       isAdminSubjectId(subjectId) ? null : QuizSubject.findOne({ subjectId }).lean(),
       User.findById(userId).lean()
@@ -254,7 +254,7 @@ export const quizService = {
 
     const levelNumber = Number(levelId);
     const [adminQuestions, adminSettings, dbSubject, user] = await Promise.all([
-      isAdminSubjectId(subjectId) ? QcmQuestion.find().sort({ updatedAt: -1, createdAt: -1 }).lean() : [],
+      isAdminSubjectId(subjectId) ? QcmQuestion.find().sort({ createdAt: 1, updatedAt: 1 }).lean() : [],
       isAdminSubjectId(subjectId) ? AdminQcmSettings.find({ category: { $exists: true, $ne: "" } }).lean() : [],
       isAdminSubjectId(subjectId) ? null : QuizSubject.findOne({ subjectId }).lean(),
       User.findById(userId).lean()
