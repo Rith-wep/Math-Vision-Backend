@@ -150,12 +150,11 @@ const normalizeDocumentMetadataUpdate = (payload = {}) => {
   const title = typeof payload.title === "string" ? payload.title.trim() : "";
   const description = typeof payload.description === "string" ? payload.description.trim() : "";
   const category = typeof payload.category === "string" ? payload.category.trim() : "";
-  const grade_level = typeof payload.grade_level === "string" ? payload.grade_level.trim() : "";
   const pdf_link = typeof payload.pdf_link === "string" ? payload.pdf_link.trim() : "";
   const thumbnail_link = typeof payload.thumbnail_link === "string" ? payload.thumbnail_link.trim() : "";
 
-  if (!title || !description || !category || !grade_level || !pdf_link) {
-    throw new AppError("Title, description, category, grade level, and PDF link are required.", 400);
+  if (!title || !description || !category || !pdf_link) {
+    throw new AppError("Title, description, category, and PDF link are required.", 400);
   }
 
   if (!isValidHttpUrl(pdf_link)) {
@@ -166,7 +165,7 @@ const normalizeDocumentMetadataUpdate = (payload = {}) => {
     throw new AppError("Thumbnail link must be a valid http or https URL.", 400);
   }
 
-  return { title, description, category, grade_level, pdf_link, thumbnail_link };
+  return { title, description, category, pdf_link, thumbnail_link };
 };
 
 const mapQuestion = (question) => ({
@@ -283,12 +282,11 @@ export const adminService = {
     const title = typeof payload.title === "string" ? payload.title.trim() : "";
     const description = typeof payload.description === "string" ? payload.description.trim() : "";
     const category = typeof payload.category === "string" ? payload.category.trim() : "";
-    const grade_level = typeof payload.grade_level === "string" ? payload.grade_level.trim() : "";
     const pdf_link = typeof payload.pdf_link === "string" ? payload.pdf_link.trim() : "";
     const thumbnail_link = typeof payload.thumbnail_link === "string" ? payload.thumbnail_link.trim() : "";
 
-    if (!title || !description || !category || !grade_level) {
-      throw new AppError("Title, description, category, and grade level are required.", 400);
+    if (!title || !description || !category) {
+      throw new AppError("Title, description, and category are required.", 400);
     }
 
     if (thumbnail_link && !isValidHttpUrl(thumbnail_link)) {
@@ -312,7 +310,7 @@ export const adminService = {
         title,
         description,
         category,
-        grade_level,
+        grade_level: "",
         visibility: "private",
         file_name: getFileNameFromUrl(pdf_link, `${sanitizeFileName(title) || "document"}.pdf`),
         file_path: "",
@@ -344,7 +342,7 @@ export const adminService = {
       title,
       description,
       category,
-      grade_level,
+      grade_level: "",
       visibility: "private",
       file_name: file.originalname,
       file_path: absoluteFilePath,
@@ -380,7 +378,7 @@ export const adminService = {
     document.title = metadataUpdate.title;
     document.description = metadataUpdate.description;
     document.category = metadataUpdate.category;
-    document.grade_level = metadataUpdate.grade_level;
+    document.grade_level = "";
     document.file_url = metadataUpdate.pdf_link;
     document.thumbnail_url = metadataUpdate.thumbnail_link;
     document.file_name = getFileNameFromUrl(

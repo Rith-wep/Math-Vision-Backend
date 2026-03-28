@@ -68,7 +68,9 @@ Rules:
 - Use Khmer for every explanation value.
 - For identity: steps must be [].
 - For basic: use 0 or 1 short step only.
-- For complex: use 3 to 6 steps.
+- For complex: use 4 to 8 clear steps when the problem needs derivation.
+- Do not compress important algebra, calculus, or equation-solving transformations into a single step.
+- If the final answer depends on an intermediate formula, show that intermediate formula in its own step.
 - token_saved_mode must be true.
 - question_text must preserve the actual math problem cleanly.
 `;
@@ -103,7 +105,8 @@ Rules:
 - Use Khmer for every explanation value.
 - For identity: steps must be [].
 - For basic: use 0 or 1 short step only.
-- For complex: use 3 to 6 steps.
+- For complex: use 4 to 8 clear steps when the problem needs derivation.
+- Do not skip important intermediate equations just to keep the answer short.
 - token_saved_mode must be true.
 `;
 
@@ -193,7 +196,8 @@ Rules:
 - Use Khmer for every explanation.
 - For identity: steps must be [].
 - For basic: use 0 or 1 short step only.
-- For complex: use 3 to 6 steps.
+- For complex: use 4 to 8 clear steps when the problem needs derivation.
+- Preserve intermediate transformations instead of collapsing them into one short step.
 - token_saved_mode must be true.
 - If question_text is missing, use this question: ${fallbackQuestionText || "unknown"}.
 
@@ -306,6 +310,20 @@ const buildLibraryResponse = (solutionDocument) => {
   };
 };
 
+const shouldRefreshCachedSolution = (cachedSolution) => {
+  if (!cachedSolution || typeof cachedSolution !== "object") {
+    return true;
+  }
+
+  if (cachedSolution.complexity !== "complex") {
+    return false;
+  }
+
+  const steps = Array.isArray(cachedSolution.steps) ? cachedSolution.steps : [];
+
+  return steps.length < 4;
+};
+
 const normalizeComplexity = (complexity, steps) => {
   if (ALLOWED_COMPLEXITIES.has(complexity)) {
     return complexity;
@@ -371,7 +389,7 @@ const validateAndNormalizeResponse = (parsed, fallbackQuestionText = "") => {
   } else if (complexity === "basic") {
     steps = normalizedSteps.slice(0, 1);
   } else {
-    steps = normalizedSteps.slice(0, 6);
+    steps = normalizedSteps.slice(0, 10);
 
     if (steps.length === 0) {
       throw new AppError("Gemini did not return usable solution steps.", 502);
@@ -1393,6 +1411,7 @@ const buildLinearEquationResult = (expression, variableSymbol, coefficients) => 
     { b: variableCoefficient, c: constantTerm },
     variableSymbol
   )} = 0`;
+  const moveConstantLatex = `${toLatexNumber(variableCoefficient)}${variableSymbol} = ${toLatexNumber(-constantTerm)}`;
   const isolatedLatex = `${variableSymbol} = ${toLatexNumber(solution)}`;
 
   return {
@@ -1408,6 +1427,11 @@ const buildLinearEquationResult = (expression, variableSymbol, coefficients) => 
       },
       {
         step: 2,
+        explanation: "ដោះស្រាយតម្លៃអថេរ។",
+        formula: moveConstantLatex
+      },
+      {
+        step: 3,
         explanation: "ដោះស្រាយតម្លៃអថេរ។",
         formula: isolatedLatex
       }
@@ -1454,6 +1478,7 @@ const buildQuadraticEquationResult = (expression, variableSymbol, coefficients) 
 
   if (isApproximatelyZero(normalizedDiscriminant)) {
     const root = -b / (2 * a);
+    const formulaLatex = `${variableSymbol} = \\frac{-(${normalizeNumberString(b)})}{2(${normalizeNumberString(a)})}`;
     const rootLatex = `${variableSymbol} = ${toLatexNumber(root)}`;
 
     return {
@@ -1475,6 +1500,11 @@ const buildQuadraticEquationResult = (expression, variableSymbol, coefficients) 
         {
           step: 3,
           explanation: "ព្រោះ \\(\\Delta = 0\\) សមីការមានឫសតែមួយ។",
+          formula: formulaLatex
+        },
+        {
+          step: 4,
+          explanation: "គណនាតម្លៃឫសចុងក្រោយ។",
           formula: rootLatex
         }
       ],
@@ -1500,7 +1530,8 @@ const buildQuadraticEquationResult = (expression, variableSymbol, coefficients) 
   }
 
   const rootsLatex = `${variableSymbol}_{1} = ${rootOneLatex},\\quad ${variableSymbol}_{2} = ${rootTwoLatex}`;
-  const finalAnswer = `${variableSymbol} = ${rootOneLatex}\\;\\text{or}\\;${rootTwoLatex}`;
+  const finalAnswer = `${variableSymbol} = ${rootOneLatex}\\;\\text{or}\\;${variableSymbol} = ${rootTwoLatex}`;
+  const quadraticFormulaLatex = `${variableSymbol} = \\frac{-(${normalizeNumberString(b)}) \\pm \\sqrt{${normalizeNumberString(normalizedDiscriminant)}}}{2(${normalizeNumberString(a)})}`;
 
   return {
     question_text: expression,
@@ -1521,7 +1552,17 @@ const buildQuadraticEquationResult = (expression, variableSymbol, coefficients) 
       {
         step: 3,
         explanation: "ប្រើរូបមន្តសមីការការេដើម្បីរកឫសទាំងពីរ។",
+        formula: quadraticFormulaLatex
+      },
+      {
+        step: 4,
+        explanation: "ជំនួសតម្លៃចូលក្នុងរូបមន្តដើម្បីរកឫសទាំងពីរ។",
         formula: rootsLatex
+      },
+      {
+        step: 5,
+        explanation: "សរសេរចម្លើយចុងក្រោយ។",
+        formula: finalAnswer
       }
     ],
     token_saved_mode: true
@@ -1993,7 +2034,7 @@ class SolverService {
     const normalizedExpression = normalizeExpressionInput(expression);
     const cachedSolution = await this.findSolutionInLibrary(normalizedExpression);
 
-    if (cachedSolution) {
+    if (cachedSolution && !shouldRefreshCachedSolution(cachedSolution)) {
       return cachedSolution;
     }
 
