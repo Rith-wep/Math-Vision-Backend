@@ -19,6 +19,15 @@ export const adminController = {
     }
   },
 
+  async renameQcmCategory(request, response, next) {
+    try {
+      const data = await adminService.renameQcmCategory(request.body);
+      response.status(200).json(data);
+    } catch (error) {
+      next(error);
+    }
+  },
+
   async getQuestions(request, response, next) {
     try {
       const data = await adminService.getQuestions();
@@ -66,7 +75,7 @@ export const adminController = {
 
   async uploadDocument(request, response, next) {
     try {
-      const data = await adminService.uploadDocument(request.body, request.file);
+      const data = await adminService.uploadDocument(request.body, request.files);
       response.status(201).json(data);
     } catch (error) {
       next(error);
@@ -75,7 +84,7 @@ export const adminController = {
 
   async updateDocument(request, response, next) {
     try {
-      const data = await adminService.updateDocument(request.params.documentId, request.body);
+      const data = await adminService.updateDocument(request.params.documentId, request.body, request.files);
       response.status(200).json(data);
     } catch (error) {
       next(error);

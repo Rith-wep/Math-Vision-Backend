@@ -7,6 +7,7 @@ import { AppError } from "../utils/AppError.js";
 const DEFAULT_UNLOCK_SCORE = 80;
 const ADMIN_SUBJECT_PREFIX = "admin_qcm_";
 const DEMO_SUBJECT_IDS = new Set(["general", "derivatives", "integrals"]);
+const FREE_QUIZ_LEVEL_LIMIT = 2;
 const buildDefaultAdminSubjectTitle = (category = "") => normalizeCategoryName(category) || "QCM";
 const buildDefaultAdminSubjectDescription = (category = "") =>
   `Practice questions for ${normalizeCategoryName(category) || "this category"}.`;
@@ -154,10 +155,13 @@ const isLevelUnlocked = (subjectProgress, levelNumber) => {
   return (previousScore.bestScore || 0) >= DEFAULT_UNLOCK_SCORE;
 };
 
-const buildLevelPayload = (subjectProgress, level) => {
+const isFreeUser = (user = {}) => (user?.role || "user") !== "admin";
+
+const buildLevelPayload = (subjectProgress, level, user) => {
   const score = findLevelScore(subjectProgress, level.levelNumber);
   const completed = (subjectProgress.completedLevels || []).includes(level.levelNumber);
-  const unlocked = isLevelUnlocked(subjectProgress, level.levelNumber);
+  const overFreeLimit = isFreeUser(user) && level.levelNumber > FREE_QUIZ_LEVEL_LIMIT;
+  const unlocked = !overFreeLimit && isLevelUnlocked(subjectProgress, level.levelNumber);
 
   return {
     id: level.levelNumber,
@@ -165,6 +169,7 @@ const buildLevelPayload = (subjectProgress, level) => {
     unlocked,
     current: unlocked && !completed,
     completed,
+    restricted: overFreeLimit,
     requiredScore: level.requiredScore || DEFAULT_UNLOCK_SCORE,
     bestScore: score.bestScore || 0,
     lastScore: score.lastScore || 0,
@@ -245,7 +250,7 @@ export const quizService = {
       titleKh: subject.titleKh,
       summaryKh: subject.summaryKh,
       image_url: subject.image_url || "",
-      levels: subject.levels.map((level) => buildLevelPayload(subjectProgress, level))
+      levels: subject.levels.map((level) => buildLevelPayload(subjectProgress, level, user))
     };
   },
 
@@ -269,6 +274,10 @@ export const quizService = {
     }
 
     const subjectProgress = findSubjectProgress(user, subjectId);
+
+    if (isFreeUser(user) && levelNumber > FREE_QUIZ_LEVEL_LIMIT) {
+      throw new AppError("Upgrade to Pro to unlock quiz levels above Level 2.", 403);
+    }
 
     if (!isLevelUnlocked(subjectProgress, levelNumber)) {
       throw new AppError("Previous quiz level must be completed with at least 80% first.", 403);

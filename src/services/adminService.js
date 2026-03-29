@@ -1,28 +1,60 @@
-import { mkdir, writeFile } from "node:fs/promises";
-import path from "node:path";
-import { fileURLToPath } from "node:url";
-
 import { AdminDocument } from "../models/adminDocumentModel.js";
 import { AdminQcmSettings } from "../models/adminQcmSettingsModel.js";
 import { QcmQuestion } from "../models/qcmQuestionModel.js";
 import { SolutionLibrary } from "../models/solutionLibraryModel.js";
+import { cloudinaryService } from "./cloudinaryService.js";
 import { AppError } from "../utils/AppError.js";
-
-const __filename = fileURLToPath(import.meta.url);
-const __dirname = path.dirname(__filename);
-const uploadsDirectory = path.resolve(__dirname, "../../uploads/admin-documents");
 const DEFAULT_QCM_SETTINGS = {
   title: "Admin QCM",
   description: "Questions created from the admin panel."
 };
+const MAX_QUESTIONS_PER_LEVEL = 10;
 
 const normalizeCategoryName = (value = "") => value.trim().replace(/\s+/g, " ");
 
-const buildSettingsKey = (category) =>
+const enforceQuestionLevelLimit = async ({ category, level, excludeQuestionId = null }) => {
+  const query = {
+    category: normalizeCategoryName(category) || "General",
+    level
+  };
+
+  if (excludeQuestionId) {
+    query._id = { $ne: excludeQuestionId };
+  }
+
+  const existingCount = await QcmQuestion.countDocuments(query);
+
+  if (existingCount >= MAX_QUESTIONS_PER_LEVEL) {
+    throw new AppError(
+      `Level ${level} in ${query.category} already has ${MAX_QUESTIONS_PER_LEVEL} questions. Please use another level or category.`,
+      400
+    );
+  }
+};
+
+const buildLegacySettingsKey = (category) =>
   `category:${normalizeCategoryName(category)
     .toLowerCase()
     .replace(/[^a-z0-9]+/g, "-")
     .replace(/^-|-$/g, "") || "general"}`;
+
+const buildSettingsKey = (category) => {
+  const normalizedCategory = normalizeCategoryName(category).toLowerCase();
+
+  return `category:${encodeURIComponent(normalizedCategory) || "general"}`;
+};
+
+const buildSettingsLookupQuery = (category) => ({
+  $or: [
+    { category: normalizeCategoryName(category) },
+    { key: buildSettingsKey(category) },
+    { key: buildLegacySettingsKey(category) }
+  ]
+});
+
+const buildTargetSettingsLookupQuery = (category) => ({
+  $or: [{ category: normalizeCategoryName(category) }, { key: buildSettingsKey(category) }]
+});
 
 const sanitizeFileName = (value) =>
   value
@@ -136,6 +168,29 @@ const normalizeQcmSettingsPayload = (payload = {}) => {
   return { category, title, description };
 };
 
+const normalizeRenameCategoryPayload = (payload = {}) => {
+  const fromCategory = normalizeCategoryName(
+    typeof payload.fromCategory === "string" ? payload.fromCategory : payload.from_category
+  );
+  const toCategory = normalizeCategoryName(
+    typeof payload.toCategory === "string" ? payload.toCategory : payload.to_category
+  );
+
+  if (!fromCategory) {
+    throw new AppError("Current category is required.", 400);
+  }
+
+  if (!toCategory) {
+    throw new AppError("New category name is required.", 400);
+  }
+
+  if (fromCategory === toCategory) {
+    throw new AppError("The new category name must be different.", 400);
+  }
+
+  return { fromCategory, toCategory };
+};
+
 const normalizeDocumentVisibilityUpdate = (payload = {}) => {
   const visibility = typeof payload.visibility === "string" ? payload.visibility.trim().toLowerCase() : "";
 
@@ -167,6 +222,20 @@ const normalizeDocumentMetadataUpdate = (payload = {}) => {
 
   return { title, description, category, pdf_link, thumbnail_link };
 };
+
+const getUploadedFile = (files, fieldName) => {
+  if (!files || typeof files !== "object") {
+    return null;
+  }
+
+  const value = files[fieldName];
+  return Array.isArray(value) && value.length ? value[0] : null;
+};
+
+const isSupportedThumbnailMimeType = (mimeType = "") =>
+  ["image/jpeg", "image/png", "image/webp", "image/gif", "image/avif", "image/heic", "image/heif", "image/bmp"].includes(
+    String(mimeType).toLowerCase()
+  );
 
 const mapQuestion = (question) => ({
   id: question._id.toString(),
@@ -204,6 +273,7 @@ const mapDocument = (document) => ({
   file_url: document.file_url,
   thumbnail_url: document.thumbnail_url || "",
   source_type: document.source_type || "upload",
+  page_count: Number(document.page_count || 1) || 1,
   uploaded_at: document.updatedAt || document.createdAt
 });
 
@@ -232,13 +302,54 @@ export const adminService = {
   async updateQcmSettings(payload) {
     const normalizedPayload = normalizeQcmSettingsPayload(payload);
     const key = buildSettingsKey(normalizedPayload.category);
-    const settings = await AdminQcmSettings.findOneAndUpdate(
-      { key },
-      { key, ...normalizedPayload },
-      { new: true, upsert: true, setDefaultsOnInsert: true }
-    );
+    const existingSettings = await AdminQcmSettings.findOne(buildSettingsLookupQuery(normalizedPayload.category));
+
+    const settings = existingSettings
+      ? await AdminQcmSettings.findByIdAndUpdate(
+          existingSettings._id,
+          { key, ...normalizedPayload },
+          { new: true, runValidators: true }
+        )
+      : await AdminQcmSettings.findOneAndUpdate(
+          { key },
+          { key, ...normalizedPayload },
+          { new: true, upsert: true, setDefaultsOnInsert: true }
+        );
 
     return mapQcmSetting(settings);
+  },
+
+  async renameQcmCategory(payload) {
+    const { fromCategory, toCategory } = normalizeRenameCategoryPayload(payload);
+    const [sourceQuestionsCount, sourceSettings, targetQuestionsCount, targetSettings] = await Promise.all([
+      QcmQuestion.countDocuments({ category: fromCategory }),
+      AdminQcmSettings.findOne(buildSettingsLookupQuery(fromCategory)),
+      QcmQuestion.countDocuments({ category: toCategory }),
+      AdminQcmSettings.findOne(buildTargetSettingsLookupQuery(toCategory))
+    ]);
+
+    if (!sourceQuestionsCount && !sourceSettings) {
+      throw new AppError("Selected category was not found.", 404);
+    }
+
+    if (targetQuestionsCount || targetSettings) {
+      throw new AppError("That category name already exists. Choose a different name.", 400);
+    }
+
+    await QcmQuestion.updateMany({ category: fromCategory }, { $set: { category: toCategory } });
+
+    if (sourceSettings) {
+      sourceSettings.key = buildSettingsKey(toCategory);
+      sourceSettings.category = toCategory;
+      await sourceSettings.save();
+    }
+
+    return {
+      fromCategory,
+      toCategory,
+      updatedQuestions: sourceQuestionsCount,
+      settingsUpdated: Boolean(sourceSettings)
+    };
   },
 
   async getQuestions() {
@@ -247,14 +358,25 @@ export const adminService = {
   },
 
   async createQuestion(payload) {
-    const question = await QcmQuestion.create(normalizeQuestionPayload(payload));
+    const normalizedPayload = normalizeQuestionPayload(payload);
+    await enforceQuestionLevelLimit({
+      category: normalizedPayload.category,
+      level: normalizedPayload.level
+    });
+    const question = await QcmQuestion.create(normalizedPayload);
     return mapQuestion(question);
   },
 
   async updateQuestion(questionId, payload) {
+    const normalizedPayload = normalizeQuestionPayload(payload);
+    await enforceQuestionLevelLimit({
+      category: normalizedPayload.category,
+      level: normalizedPayload.level,
+      excludeQuestionId: questionId
+    });
     const question = await QcmQuestion.findByIdAndUpdate(
       questionId,
-      normalizeQuestionPayload(payload),
+      normalizedPayload,
       { new: true, runValidators: true }
     );
 
@@ -278,7 +400,9 @@ export const adminService = {
     return documents.map(mapDocument);
   },
 
-  async uploadDocument(payload = {}, file) {
+  async uploadDocument(payload = {}, files) {
+    const file = getUploadedFile(files, "file");
+    const thumbnailFile = getUploadedFile(files, "thumbnail_file");
     const title = typeof payload.title === "string" ? payload.title.trim() : "";
     const description = typeof payload.description === "string" ? payload.description.trim() : "";
     const category = typeof payload.category === "string" ? payload.category.trim() : "";
@@ -291,6 +415,10 @@ export const adminService = {
 
     if (thumbnail_link && !isValidHttpUrl(thumbnail_link)) {
       throw new AppError("Thumbnail link must be a valid http or https URL.", 400);
+    }
+
+    if (thumbnailFile && !isSupportedThumbnailMimeType(thumbnailFile.mimetype)) {
+      throw new AppError("Thumbnail must be a JPG, PNG, WEBP, GIF, AVIF, HEIC, HEIF, or BMP image.", 400);
     }
 
     if (!file && !pdf_link) {
@@ -306,6 +434,12 @@ export const adminService = {
         throw new AppError("PDF link must be a valid http or https URL.", 400);
       }
 
+      const thumbnailAsset = thumbnailFile
+        ? await cloudinaryService.uploadImage(thumbnailFile, {
+            publicIdPrefix: `${sanitizeFileName(title) || "document"}-thumbnail`
+          })
+        : null;
+
       const document = await AdminDocument.create({
         title,
         description,
@@ -315,10 +449,15 @@ export const adminService = {
         file_name: getFileNameFromUrl(pdf_link, `${sanitizeFileName(title) || "document"}.pdf`),
         file_path: "",
         file_url: pdf_link,
-        thumbnail_url: thumbnail_link,
+        thumbnail_url: thumbnailAsset?.secureUrl || thumbnail_link,
+        cloudinary_public_id: "",
+        cloudinary_resource_type: "",
+        thumbnail_cloudinary_public_id: thumbnailAsset?.publicId || "",
+        thumbnail_cloudinary_resource_type: thumbnailAsset?.resourceType || "",
         source_type: "link",
         mime_type: "application/pdf",
-        file_size: 0
+        file_size: 0,
+        page_count: 1
       });
 
       return mapDocument(document);
@@ -328,15 +467,14 @@ export const adminService = {
       throw new AppError("Only PDF documents are supported.", 400);
     }
 
-    await mkdir(uploadsDirectory, { recursive: true });
-
-    const extension = path.extname(file.originalname || ".pdf") || ".pdf";
-    const baseName = sanitizeFileName(path.basename(file.originalname || title, extension) || title || "document");
-    const storedFileName = `${Date.now()}-${baseName || "document"}${extension.toLowerCase()}`;
-    const absoluteFilePath = path.join(uploadsDirectory, storedFileName);
-    const publicFileUrl = `/uploads/admin-documents/${storedFileName}`;
-
-    await writeFile(absoluteFilePath, file.buffer);
+    const uploadResult = await cloudinaryService.uploadDocument(file, {
+      publicIdPrefix: sanitizeFileName(title) || "document"
+    });
+    const thumbnailAsset = thumbnailFile
+      ? await cloudinaryService.uploadImage(thumbnailFile, {
+          publicIdPrefix: `${sanitizeFileName(title) || "document"}-thumbnail`
+        })
+      : null;
 
     const document = await AdminDocument.create({
       title,
@@ -345,19 +483,26 @@ export const adminService = {
       grade_level: "",
       visibility: "private",
       file_name: file.originalname,
-      file_path: absoluteFilePath,
-      file_url: publicFileUrl,
-      thumbnail_url: thumbnail_link && isValidHttpUrl(thumbnail_link) ? thumbnail_link : "",
+      file_path: "",
+      file_url: uploadResult.secureUrl,
+      thumbnail_url: thumbnailAsset?.secureUrl || (thumbnail_link && isValidHttpUrl(thumbnail_link) ? thumbnail_link : ""),
+      cloudinary_public_id: uploadResult.publicId,
+      cloudinary_resource_type: uploadResult.resourceType,
+      thumbnail_cloudinary_public_id: thumbnailAsset?.publicId || "",
+      thumbnail_cloudinary_resource_type: thumbnailAsset?.resourceType || "",
       source_type: "upload",
       mime_type: file.mimetype,
-      file_size: file.size || 0
+      file_size: uploadResult.bytes || file.size || 0,
+      page_count: uploadResult.pages || 1
     });
 
     return mapDocument(document);
   },
 
-  async updateDocument(documentId, payload) {
+  async updateDocument(documentId, payload, files) {
     const document = await AdminDocument.findById(documentId);
+    const file = getUploadedFile(files, "file");
+    const thumbnailFile = getUploadedFile(files, "thumbnail_file");
 
     if (!document) {
       throw new AppError("Document not found.", 404);
@@ -374,20 +519,109 @@ export const adminService = {
       return mapDocument(document);
     }
 
-    const metadataUpdate = normalizeDocumentMetadataUpdate(payload);
-    document.title = metadataUpdate.title;
-    document.description = metadataUpdate.description;
-    document.category = metadataUpdate.category;
+    const title = typeof payload?.title === "string" ? payload.title.trim() : "";
+    const description = typeof payload?.description === "string" ? payload.description.trim() : "";
+    const category = typeof payload?.category === "string" ? payload.category.trim() : "";
+    const thumbnailLink = typeof payload?.thumbnail_link === "string" ? payload.thumbnail_link.trim() : "";
+
+    if (!title || !description || !category) {
+      throw new AppError("Title, description, and category are required.", 400);
+    }
+
+    if (thumbnailLink && !isValidHttpUrl(thumbnailLink)) {
+      throw new AppError("Thumbnail link must be a valid http or https URL.", 400);
+    }
+
+    if (thumbnailFile && !isSupportedThumbnailMimeType(thumbnailFile.mimetype)) {
+      throw new AppError("Thumbnail must be a JPG, PNG, WEBP, GIF, AVIF, HEIC, HEIF, or BMP image.", 400);
+    }
+
+    document.title = title;
+    document.description = description;
+    document.category = category;
     document.grade_level = "";
-    document.file_url = metadataUpdate.pdf_link;
-    document.thumbnail_url = metadataUpdate.thumbnail_link;
-    document.file_name = getFileNameFromUrl(
-      metadataUpdate.pdf_link,
-      document.file_name || `${sanitizeFileName(metadataUpdate.title) || "document"}.pdf`
-    );
-    document.source_type = "link";
-    document.file_path = "";
-    document.mime_type = "application/pdf";
+
+    if (thumbnailFile) {
+      const previousThumbnailPublicId = document.thumbnail_cloudinary_public_id;
+      const previousThumbnailResourceType = document.thumbnail_cloudinary_resource_type || "image";
+      const thumbnailAsset = await cloudinaryService.uploadImage(thumbnailFile, {
+        publicIdPrefix: `${sanitizeFileName(title) || "document"}-thumbnail`
+      });
+
+      document.thumbnail_url = thumbnailAsset.secureUrl;
+      document.thumbnail_cloudinary_public_id = thumbnailAsset.publicId;
+      document.thumbnail_cloudinary_resource_type = thumbnailAsset.resourceType;
+
+      if (previousThumbnailPublicId) {
+        await cloudinaryService.destroyAsset({
+          publicId: previousThumbnailPublicId,
+          resourceType: previousThumbnailResourceType
+        });
+      }
+    } else if (thumbnailLink) {
+      if (document.thumbnail_cloudinary_public_id) {
+        await cloudinaryService.destroyAsset({
+          publicId: document.thumbnail_cloudinary_public_id,
+          resourceType: document.thumbnail_cloudinary_resource_type || "image"
+        });
+      }
+
+      document.thumbnail_url = thumbnailLink;
+      document.thumbnail_cloudinary_public_id = "";
+      document.thumbnail_cloudinary_resource_type = "";
+    }
+
+    if (file) {
+      if (file.mimetype !== "application/pdf") {
+        throw new AppError("Only PDF documents are supported.", 400);
+      }
+
+      const previousCloudinaryPublicId = document.cloudinary_public_id;
+      const previousCloudinaryResourceType = document.cloudinary_resource_type || "raw";
+      const uploadResult = await cloudinaryService.uploadDocument(file, {
+        publicIdPrefix: sanitizeFileName(title) || "document"
+      });
+
+      document.file_url = uploadResult.secureUrl;
+      document.file_name = file.originalname;
+      document.file_path = "";
+      document.cloudinary_public_id = uploadResult.publicId;
+      document.cloudinary_resource_type = uploadResult.resourceType;
+      document.source_type = "upload";
+      document.mime_type = file.mimetype;
+      document.file_size = uploadResult.bytes || file.size || 0;
+      document.page_count = uploadResult.pages || 1;
+
+      if (previousCloudinaryPublicId) {
+        await cloudinaryService.destroyAsset({
+          publicId: previousCloudinaryPublicId,
+          resourceType: previousCloudinaryResourceType
+        });
+      }
+    } else if (typeof payload?.pdf_link === "string" && payload.pdf_link.trim()) {
+      const metadataUpdate = normalizeDocumentMetadataUpdate(payload);
+
+      if (document.cloudinary_public_id) {
+        await cloudinaryService.destroyAsset({
+          publicId: document.cloudinary_public_id,
+          resourceType: document.cloudinary_resource_type || "raw"
+        });
+      }
+
+      document.file_url = metadataUpdate.pdf_link;
+      document.file_name = getFileNameFromUrl(
+        metadataUpdate.pdf_link,
+        document.file_name || `${sanitizeFileName(metadataUpdate.title) || "document"}.pdf`
+      );
+      document.source_type = "link";
+      document.file_path = "";
+      document.cloudinary_public_id = "";
+      document.cloudinary_resource_type = "";
+      document.mime_type = "application/pdf";
+      document.file_size = 0;
+      document.page_count = 1;
+    }
+
     await document.save();
 
     return mapDocument(document);
@@ -398,6 +632,20 @@ export const adminService = {
 
     if (!document) {
       throw new AppError("Document not found.", 404);
+    }
+
+    if (document.cloudinary_public_id) {
+      await cloudinaryService.destroyAsset({
+        publicId: document.cloudinary_public_id,
+        resourceType: document.cloudinary_resource_type || "raw"
+      });
+    }
+
+    if (document.thumbnail_cloudinary_public_id) {
+      await cloudinaryService.destroyAsset({
+        publicId: document.thumbnail_cloudinary_public_id,
+        resourceType: document.thumbnail_cloudinary_resource_type || "image"
+      });
     }
 
     await AdminDocument.findByIdAndDelete(documentId);

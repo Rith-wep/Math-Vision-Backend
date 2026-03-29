@@ -68,6 +68,10 @@ export const env = {
     getEnvValue("GOOGLE_CLOUD_VISION_CREDENTIALS_JSON")
     || getEnvValue("GOOGLE_CLOUD_TTS_CREDENTIALS_JSON"),
   googleCloudProjectId: getEnvValue("GOOGLE_CLOUD_PROJECT_ID"),
+  cloudinaryCloudName: getEnvValue("CLOUDINARY_CLOUD_NAME"),
+  cloudinaryApiKey: getEnvValue("CLOUDINARY_API_KEY"),
+  cloudinaryApiSecret: getEnvValue("CLOUDINARY_API_SECRET"),
+  cloudinaryUploadFolder: getEnvValue("CLOUDINARY_UPLOAD_FOLDER", "math/admin-documents"),
   adminEmails: parseAdminEmails()
 };
 

@@ -9,6 +9,15 @@ export const getDashboardStats = async (request, response, next) => {
   }
 };
 
+export const getSolveAccessStatus = async (request, response, next) => {
+  try {
+    const summary = await userDashboardService.getSolveAccessStatus(request.user._id);
+    response.status(200).json(summary);
+  } catch (error) {
+    next(error);
+  }
+};
+
 export const getUserHistory = async (request, response, next) => {
   try {
     const history = await userDashboardService.getSolveHistory(request.user._id);

@@ -5,7 +5,7 @@ import { env } from "../config/env.js";
 import { User } from "../models/userModel.js";
 import { AppError } from "../utils/AppError.js";
 
-const buildUserPayload = (user) => ({
+  const buildUserPayload = (user) => ({
   id: user._id.toString(),
   googleId: user.googleId,
   displayName: user.displayName,
@@ -62,9 +62,10 @@ export const authService = {
     });
   },
 
-  async registerWithEmail({ displayName, email, password }) {
+  async registerWithEmail({ displayName, email, password, deviceId }) {
     const normalizedEmail = email?.trim().toLowerCase();
     const trimmedName = displayName?.trim();
+    const normalizedDeviceId = typeof deviceId === "string" ? deviceId.trim() : "";
 
     if (!trimmedName) {
       throw new AppError("Full name is required.", 400);
@@ -78,6 +79,14 @@ export const authService = {
       throw new AppError("Password must be at least 6 characters long.", 400);
     }
 
+    if (normalizedDeviceId) {
+      const existingDeviceAccounts = await User.countDocuments({ deviceId: normalizedDeviceId });
+
+      if (existingDeviceAccounts >= 3) {
+        throw new AppError("Limit reached: This device already has 3 accounts.", 403);
+      }
+    }
+
     const existingUser = await User.findOne({ email: normalizedEmail });
 
     if (existingUser?.passwordHash) {
@@ -89,6 +98,7 @@ export const authService = {
     if (existingUser) {
       existingUser.displayName = trimmedName;
       existingUser.passwordHash = passwordHash;
+      existingUser.deviceId = normalizedDeviceId;
       existingUser.role = resolveUserRole(normalizedEmail, existingUser.role);
       await existingUser.save();
       return existingUser;
@@ -97,6 +107,7 @@ export const authService = {
     return User.create({
       displayName: trimmedName,
       email: normalizedEmail,
+      deviceId: normalizedDeviceId,
       passwordHash,
       role: resolveUserRole(normalizedEmail)
     });

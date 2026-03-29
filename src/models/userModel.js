@@ -18,6 +18,11 @@ const userSchema = new mongoose.Schema(
       lowercase: true,
       trim: true
     },
+    deviceId: {
+      type: String,
+      default: "",
+      trim: true
+    },
     avatar: {
       type: String,
       default: ""
@@ -101,6 +106,11 @@ const userSchema = new mongoose.Schema(
               type: String,
               default: ""
             },
+            accessMode: {
+              type: String,
+              enum: ["full", "answer_only"],
+              default: "full"
+            },
             cachedSolution: {
               type: mongoose.Schema.Types.Mixed,
               default: null
@@ -134,5 +144,6 @@ userSchema.index(
     }
   }
 );
+userSchema.index({ deviceId: 1 });
 
 export const User = mongoose.model("User", userSchema);

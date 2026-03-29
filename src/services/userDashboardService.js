@@ -1,8 +1,51 @@
 import { User } from "../models/userModel.js";
 
 const WEEK_IN_MS = 7 * 24 * 60 * 60 * 1000;
+const DAILY_EXPLAINED_LIMIT = 4;
+const DAILY_ANSWER_ONLY_LIMIT = 3;
+const DAILY_SOLVE_LIMIT = DAILY_EXPLAINED_LIMIT + DAILY_ANSWER_ONLY_LIMIT;
 
 const getQuestionText = (entry = {}) => (entry.questionText || entry.expression || "").trim();
+const getDayStart = (timestamp = new Date()) => {
+  const nextDate = new Date(timestamp);
+  nextDate.setHours(0, 0, 0, 0);
+  return nextDate;
+};
+
+const getDailySolveEntries = (history = [], timestamp = new Date()) => {
+  const dayStart = getDayStart(timestamp).getTime();
+  return history.filter((entry) => {
+    const solvedAt = new Date(entry.solvedAt).getTime();
+    return Number.isFinite(solvedAt) && solvedAt >= dayStart;
+  });
+};
+
+const buildSolveAccessSummary = (history = [], timestamp = new Date()) => {
+  const dailyEntries = getDailySolveEntries(history, timestamp);
+  const totalUsed = dailyEntries.length;
+  const explainedUsed = Math.min(totalUsed, DAILY_EXPLAINED_LIMIT);
+  const answerOnlyUsed = Math.min(
+    Math.max(totalUsed - DAILY_EXPLAINED_LIMIT, 0),
+    DAILY_ANSWER_ONLY_LIMIT
+  );
+  const remainingExplained = Math.max(DAILY_EXPLAINED_LIMIT - explainedUsed, 0);
+  const remainingAnswerOnly = Math.max(DAILY_ANSWER_ONLY_LIMIT - answerOnlyUsed, 0);
+
+  return {
+    explainedUsed,
+    answerOnlyUsed,
+    totalUsed,
+    remainingExplained,
+    remainingAnswerOnly,
+    totalRemaining: Math.max(DAILY_SOLVE_LIMIT - totalUsed, 0),
+    dailyLimit: DAILY_SOLVE_LIMIT,
+    fullExplanationLimit: DAILY_EXPLAINED_LIMIT,
+    answerOnlyLimit: DAILY_ANSWER_ONLY_LIMIT,
+    nextMode:
+      remainingExplained > 0 ? "full" : remainingAnswerOnly > 0 ? "answer_only" : "blocked",
+    isBlocked: totalUsed >= DAILY_SOLVE_LIMIT
+  };
+};
 
 const parseStoredSolution = (entry = {}) => {
   if (entry.solutionText?.trim()) {
@@ -89,7 +132,7 @@ export const userDashboardService = {
     return parseStoredSolution(matchedEntry);
   },
 
-  async recordSolvedProblem(userId, { questionText, solution, timestamp = new Date() }) {
+  async recordSolvedProblem(userId, { questionText, solution, accessMode = "full", timestamp = new Date() }) {
     if (!userId || !questionText?.trim() || !solution) {
       return null;
     }
@@ -119,6 +162,7 @@ export const userDashboardService = {
               {
                 questionText: normalizedQuestionText,
                 solutionText: serializedSolution,
+                accessMode: accessMode === "answer_only" ? "answer_only" : "full",
                 solvedAt: timestamp
               }
             ],
@@ -136,6 +180,22 @@ export const userDashboardService = {
     return User.findById(userId).select("solveHistory totalSolved");
   },
 
+  async getSolveAccessStatus(userId, timestamp = new Date()) {
+    const user = await User.findById(userId).lean();
+    const history = Array.isArray(user?.solveHistory) ? user.solveHistory : [];
+
+    return buildSolveAccessSummary(history, timestamp);
+  },
+
+  async getSolveAccessMode(userId, timestamp = new Date()) {
+    const summary = await this.getSolveAccessStatus(userId, timestamp);
+
+    return {
+      mode: summary.nextMode,
+      summary
+    };
+  },
+
   async getDashboardStats(userId) {
     const user = await User.findById(userId).lean();
 
@@ -143,7 +203,8 @@ export const userDashboardService = {
       return {
         totalSolved: 0,
         weeklySolved: 0,
-        recentHistory: []
+        recentHistory: [],
+        solveAccess: buildSolveAccessSummary([])
       };
     }
 
@@ -156,7 +217,8 @@ export const userDashboardService = {
     return {
       totalSolved: user.totalSolved || history.length,
       weeklySolved,
-      recentHistory: buildRecentHistory(history)
+      recentHistory: buildRecentHistory(history),
+      solveAccess: buildSolveAccessSummary(history)
     };
   },
 

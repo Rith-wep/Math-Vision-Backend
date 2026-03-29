@@ -56,6 +56,7 @@ const mapAdminDocumentToFormula = (document) => ({
   source_type: document.source_type || "link",
   file_name: document.file_name,
   file_size: document.file_size || 0,
+  page_count: Number(document.page_count || 1) || 1,
   createdAt: document.createdAt,
   updatedAt: document.updatedAt
 });

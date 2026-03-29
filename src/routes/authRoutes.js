@@ -28,6 +28,7 @@ authRoutes.get(
 );
 
 authRoutes.post("/register", authController.register);
+authRoutes.post("/signup", authController.register);
 authRoutes.post("/login", authController.login);
 authRoutes.get(
   "/google/callback",

@@ -47,6 +47,26 @@ const adminDocumentSchema = new mongoose.Schema(
       default: "",
       trim: true
     },
+    cloudinary_public_id: {
+      type: String,
+      default: "",
+      trim: true
+    },
+    cloudinary_resource_type: {
+      type: String,
+      default: "",
+      trim: true
+    },
+    thumbnail_cloudinary_public_id: {
+      type: String,
+      default: "",
+      trim: true
+    },
+    thumbnail_cloudinary_resource_type: {
+      type: String,
+      default: "",
+      trim: true
+    },
     source_type: {
       type: String,
       enum: ["upload", "link"],
@@ -60,6 +80,10 @@ const adminDocumentSchema = new mongoose.Schema(
     file_size: {
       type: Number,
       default: 0
+    },
+    page_count: {
+      type: Number,
+      default: 1
     }
   },
   {
